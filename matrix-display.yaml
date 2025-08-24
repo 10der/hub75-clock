@@ -1,0 +1,588 @@
+substitutions:
+  name: matrix-display
+  full_name: Matrix Display
+
+esphome:
+  name: ${name}
+  friendly_name: ${full_name}
+  platformio_options:
+    board_build.flash_mode: dio
+  #includes:
+  #  - my_clock.h
+  on_boot:
+    - priority: -600
+      then:
+        - display.page.show: page1
+    - priority: -100
+      then:      
+        - display.page.show: page1
+        - script.execute: force_time_sync
+        - wait_until: time.has_time
+        - logger.log: "Boot script got time!"
+        - delay: 2s
+        - script.execute: init_mqtt
+        - display.page.show: page2
+    - priority: 800
+      then:
+        - lambda: |-
+            id(clock_core).set_clock_font(id(digital));
+            id(clock_core).set_app_font(id(roboto));
+            id(clock_core).set_icon_font(id(icon_font));
+            id(clock_core).set_extra_font(id(default_font));
+    
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: arduino
+
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [ dfplayer_pro, display_tools ]
+  - source: github://TillFleisch/ESPHome-HUB75-MatrixDisplayWrapper@main
+
+logger:
+  level: debug
+
+i2c:
+  sda: 41
+  scl: 42
+
+#improv_serial:
+
+# esp32_improv:
+#   authorizer: none
+
+ota:
+- platform: esphome
+
+wifi:
+  # use_address: 192.168.88.65
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+captive_portal:
+
+web_server:
+  port: 80
+  version: 3
+
+# 4 pins serial port: GND-RX-TX-5V (bottom to top, 5V pin has the little triangle next to it)
+# U0RXD: GPIO44
+# U0TXD: GPIO43
+# 2 pins: GND and GPIO0 (the rectangular pin), short-circuit during power-on to enter programming mode
+
+uart:
+  id: uart_id
+  rx_pin: GPIO44 # U0RXD
+  tx_pin: GPIO43 # U0TXD
+  baud_rate: 115200
+
+dfplayer_pro:
+  id: my_dfplayer
+  uart_id: uart_id
+  # # Встановлюємо гучність (0-30)
+  # set_volume: 15
+  # # Вимикаємо промпти
+  # set_prompt: false
+
+# api:
+#   reboot_timeout: 0s
+   
+mqtt:
+   # discovery: false
+   broker: "192.168.88.69" #raspberrypi.local
+   id: mqtt_broker
+   username: "mqtt"
+   password: "mqtt"
+   enable_on_boot: False
+  #  on_connect:
+  #   - lambda: |-
+  #       id(mqtt_broker).subscribe_json("${name}/service/apps/#", [=](const std::string &topic, JsonObject root) {
+  #           ESP_LOGD("DEBUG", "APP %s : Payload  %s" , getLastSegment(topic).c_str(), root);
+  #       });
+
+   on_json_message:
+    - topic: ${name}/service/play_sound
+      qos: 0
+      then:
+
+    - topic: ${name}/service/climate
+      qos: 0
+      then:
+        - lambda: |-
+            id(clock_core).set_temperature_outside(x["temperature_outside"]);
+            id(clock_core).set_temperature_inside(x["temperature_inside"]);
+            id(clock_core).set_weather_icon(x["weather_icon"]);
+            std::vector<int> temp_vector;
+            for (size_t i = 0; i < x["temperature_progress"].size(); i++) {
+              temp_vector.push_back(x["temperature_progress"][i].as<int>());
+            }
+            id(clock_core).set_temperature_progress(temp_vector);
+
+    - topic: ${name}/service/message
+      qos: 0
+      then:
+        lambda: |-
+            auto message_icon = x["message_icon"];
+            auto message_icon_color = x["message_icon_color"];
+            // auto message = x["message"];
+            int message_repeat = x["message_repeat"];
+            auto message_color = x["message_color"];
+            auto sound = x["sound"];
+
+            // Перевіряємо, чи довжина тексту перевищує 80 символів
+            std::string message = x["message"].as<std::string>();
+            // Перевіряємо, чи довжина тексту перевищує 255 символів
+            id(clock_core).addAlert(message, message_color, message_icon, message_icon_color, sound, message_repeat);
+
+    - topic: ${name}/service/add_app
+      qos: 0
+      then:
+        lambda: |-
+          auto app_name = x["app_name"];
+          auto app_icon = x["app_icon"];
+          auto app_icon_color = x["app_icon_color"];
+          auto app_body = x["app_body"];
+          auto app_color = x["app_color"];
+          int app_repeat = x["app_repeat"];
+
+          if (x["app_body_parts"]) {            
+            std::vector<std::string> texts;
+            std::vector<std::string> colors;
+
+            auto parts = x["app_body_parts"];  // масив елементів {text, color}
+            for (size_t i = 0; i < parts.size(); i++) {
+              texts.push_back(parts[i]["text"].as<std::string>());
+              colors.push_back(parts[i]["color"].as<std::string>());
+            }
+
+            // Збираємо кольорові слова з урахуванням mdi: префікса
+            auto text_parts = id(clock_core).make_colored_words(
+                texts, colors,
+                id(roboto),      // text_font
+                id(icon_font)    // icon_font
+            );
+
+            id(clock_core).addApp(
+              app_name,
+              "-",                           // body не використовується, бо є text_parts
+              app_color,
+              app_repeat,
+              app_icon,
+              app_icon_color,
+              text_parts,
+              {}                             // draw_objects
+            );
+          } else if (x["app_body_draw"]) {
+            JsonObjectConst app_body_draw = x["app_body_draw"];
+            // id(clock_core).addApp(app_name, "-", app_color, app_repeat, app_icon, app_icon_color, {}, jsonToDrawObjects(app_body_draw));
+          } else
+          {
+            // default
+            id(clock_core).addApp(app_name, app_body, app_color, app_repeat, app_icon, app_icon_color);
+          }
+
+    - topic: ${name}/service/del_app
+      qos: 0
+      then:
+        lambda: |-
+          auto app_name = x["app_name"];
+          id(clock_core).delApp(app_name);
+
+time:
+  - platform: pcf8563
+    address: 0x51
+    id: pcf8563_time
+
+  - platform: sntp
+    id: clock_time
+    timezone: Europe/Kyiv
+    servers:
+     - 0.pool.ntp.org
+     - 1.pool.ntp.org
+     - 2.pool.ntp.org
+    on_time_sync:
+      then:
+        pcf8563.write_time:
+
+# https://pictogrammers.com/library/mdi/icon
+font:
+  - file: "fonts/materialdesignicons-webfont.ttf"
+    id: icon_font
+    size: 24
+    glyphs:
+      - "\U000F0594" # mdi:weather-night
+      - "\U000F0590" # mdi:weather-cloudy
+      - "\U000F0591" # mdi:weather-fog
+      - "\U000F0592" # mdi:weather-hail
+      - "\U000F0593" # mdi:weather-lightning
+      - "\U000F067E" # mdi:weather-lightning-rainy
+      - "\U000F0595" # mdi:weather-partly-cloudy
+      - "\U000F0596" # mdi:weather-pouring      
+      - "\U000F0597" # mdi:weather-rainy
+      - "\U000F0598" # mdi:weather-snowy
+      - "\U000F067F" # mdi:weather-snowy-rainy
+      - "\U000F0599" # mdi:weather-sunny
+      - "\U000F059D" # mdi:weather-windy
+      - "\U000F059E" # mdi:weather-windy-variant
+      - "\U000F0F31" # mdi:weather-night-partly-cloudy
+
+      - "\U000F05D6" # mdi:alert-circle-outline
+      - "\U000F075A" # mdi:music
+
+      - "\U000F059A" # mdi:weather-sunset
+      - "\U000F059B" # mdi:weather-sunset-down
+      - "\U000F059C" # mdi:weather-sunset-up  
+      - "\U000F0510" # mdi:thermometer-lines
+      - "\U000F058E" # mdi:water-percent
+      - "\U000F0435" # mdi:quality-high
+      - "\U000F0A0C" # mdi:quality-low
+      - "\U000F0A0D" # mdi:quality-medium
+      - "\U000F0D59" # mdi:bell-alert
+      - "\U000F00EB" # mdi:cake-variant
+      - "\U000F0675" # mdi:application-cog
+ 
+      - "\U000F0F61" # mdi:moon-first-quarter
+      - "\U000F0F62" # mdi:moon-full
+      - "\U000F0F63" # mdi:moon-last-quarter
+      - "\U000F0F64" # mdi:moon-new
+      - "\U000F0F65" # mdi:moon-waning-crescent
+      - "\U000F0F66" # mdi:moon-waning-gibbous
+      - "\U000F0F67" # mdi:moon-waxing-crescent
+      - "\U000F0F68" # mdi:moon-waxing-gibbous
+      - "\U000F0F54" # mdi:home-thermometer
+      - "\U000F18D7" # mdi:sun-thermometer-outline
+      - "\U000F072A" # mdi:washing-machine
+      - "\U000F0A31" # mdi:calendar-alert
+      - "\U000F04B2" # mdi:sleep
+      - "\U000F1B94" # mdi:bed-clock
+
+  - file: "fonts/Monocraft-Light.ttf"
+    id: roboto
+    size: 18
+    bpp: 1
+    glyphsets:
+      - GF_Cyrillic_Core
+      - GF_Latin_Core
+
+  - file: "fonts/MatrixChunky8X.ttf"
+    id: default_font
+    size: 8
+    glyphs: |-
+      0123456789+-°
+
+  - file: "fonts/DSEG7Classic-Bold.ttf"
+    id: digital
+    size: 24
+    glyphs: |-
+      0123456789 :
+
+color:
+  - id: teal
+    hex: 00CED1
+  - id: blue
+    hex: 0000FF
+  - id: brown
+    hex: D2691E
+  - id: orange
+    hex: FFA500
+  - id: green
+    hex: 00FF00
+  - id: pink
+    hex: FF69B4
+  - id: purple
+    hex: 9400D3
+  - id: red
+    hex: FF0000
+  - id: yellow
+    hex: FFFF00
+  - id: gray
+    hex: 808080
+  - id: light_gray
+    hex: D3D3D3
+  - id: white
+    hex: FFFFFF
+
+interval:
+   - interval: 5s
+     then:
+      - lambda: |-
+          auto apps = id(clock_core).get_app_loop();
+          id(mqtt_broker).publish("${name}/app-loop", apps.c_str());
+
+
+
+# interval:
+#    - interval: 66ms
+#      then:
+#        animation.next_frame: my_animation
+
+#define WF2_X1_R1_PIN 2
+#define WF2_X1_R2_PIN 3
+#define WF2_X1_G1_PIN 6
+#define WF2_X1_G2_PIN 7
+#define WF2_X1_B1_PIN 10
+#define WF2_X1_B2_PIN 11
+#define WF2_X1_E_PIN 21
+
+#define WF2_X2_R1_PIN 4
+#define WF2_X2_R2_PIN 5
+#define WF2_X2_G1_PIN 8
+#define WF2_X2_G2_PIN 9
+#define WF2_X2_B1_PIN 12
+#define WF2_X2_B2_PIN 13
+#define WF2_X2_E_PIN -1        // Currently unknown, so X2 port will not work (yet) with 1/32 scan panels
+
+#define WF2_A_PIN 39
+#define WF2_B_PIN 38
+#define WF2_C_PIN 37
+#define WF2_D_PIN 36
+#define WF2_OE_PIN 35
+#define WF2_CLK_PIN 34
+#define WF2_LAT_PIN 33
+
+#define WF2_BUTTON_TEST     17  // Test key button on PCB, 1=normal, 0=pressed
+#define WF2_LED_RUN_PIN     40  // Status LED on PCB
+#define WF2_BM8563_I2C_SDA  41  // RTC BM8563 I2C port
+#define WF2_BM8563_I2C_SCL  42
+#define WF2_USB_DM_PIN 19
+#define WF2_USB_DP_PIN 20
+
+display:
+  - platform: hub75_matrix_display
+    id: matrix
+    width: 128
+    height: 64
+    chain_length: 1    
+    brightness: 30
+
+    # R1_pin: 2
+    # R2_pin: 3
+    B1_pin: 2
+    B2_pin: 3
+    G1_pin: 6
+    G2_pin: 7
+    # B1_pin: 10
+    # B2_pin: 11
+    R1_pin: 10
+    R2_pin: 11
+    A_pin: 39
+    B_pin: 38
+    C_pin: 37
+    D_pin: 36
+    E_pin: 21
+    OE_pin: 35
+    CLK_pin: 34
+    LAT_pin: 33
+
+    driver: icn2038s
+    clock_phase: false
+    i2sspeed: HZ_20M
+    update_interval: 8ms
+    latch_blanking: 4
+
+    pages:
+      - id: page1
+        lambda: |-          
+          // it.image(0, 0, id(my_animation));          
+          it.print((it.get_width() / 2), (it.get_height() / 2), id(roboto), TextAlign::CENTER, "=Loading=");
+
+      - id: page2
+        lambda: |-
+          id(clock_core).render_main_screen(it);
+          id(clock_core).render_app_screen(it);
+          // it.filled_rectangle(0, 0, it.get_width(), it.get_height(), id(red));
+
+      - id: page3
+        lambda: |-
+          // it.image(32, 0, id(cover_image));
+
+display_tools:
+ id: clock_core
+ clock_time: clock_time
+
+switch:
+  - platform: hub75_matrix_display
+    matrix_id: matrix
+    restore_mode: ALWAYS_ON
+    name: "Power"
+    id: power
+
+  - platform: restart
+    name: "Restart"
+
+  - platform: template
+    name: "Night mode"
+    id: night_mode
+    icon: mdi:sleep
+    optimistic: true
+
+  - platform: template
+    name: "Top left alert"
+    id: top_left_alert
+    icon: mdi:arrow-top-left-thick
+    lambda: |-
+      return id(clock_core).get_top_left();
+    turn_on_action:
+      then:
+          lambda: |-
+            id(clock_core).set_top_left(true);
+    turn_off_action:
+      then:
+          lambda: |-
+            id(clock_core).set_top_left(false);
+
+  - platform: template
+    name: "Top right alert"
+    id: top_right_alert
+    icon: mdi:arrow-top-right-thick
+    lambda: |-
+      return id(clock_core).get_top_right();
+    turn_on_action:
+      then:
+          lambda: |-
+            id(clock_core).set_top_right(true);
+    turn_off_action:
+      then:
+          lambda: |-
+            id(clock_core).set_top_right(false);
+
+  - platform: template
+    name: "Bottom right alert"
+    id: bottom_right_alert
+    icon: mdi:arrow-bottom-right-thick
+    lambda: |-
+      return id(clock_core).get_bottom_right(); 
+    turn_on_action:
+      then:
+          lambda: |-
+            id(clock_core).set_bottom_right(true);
+    turn_off_action:
+      then:
+          lambda: |-
+            id(clock_core).set_bottom_right(false);
+
+  - platform: template
+    name: "Bottom left alert"
+    id: bottom_left_alert
+    icon: mdi:arrow-bottom-left-thick
+    lambda: |-
+      return id(clock_core).get_bottom_left();
+    turn_on_action:
+      then:
+        lambda: |-
+            id(clock_core).set_bottom_left(true);
+    turn_off_action:
+      then:
+        lambda: |-
+            id(clock_core).set_bottom_left(false);
+
+number:
+  - platform: hub75_matrix_display
+    matrix_id: matrix
+    name: "Brightness"
+
+script:
+  - id: refresh_display
+    mode: restart
+    then:
+      - component.update: matrix
+
+  - id: init_mqtt
+    then:
+      - lambda: |-
+          if(!id(mqtt_address).state.empty()){
+            id(mqtt_broker).set_broker_address(id(mqtt_address).state.c_str());
+            id(mqtt_broker).set_username(id(mqtt_username).state.c_str());
+            id(mqtt_broker).set_password(id(mqtt_password).state.c_str());
+            id(mqtt_broker).enable();
+          }
+
+  - id: force_time_sync
+    then:
+      - lambda: |-
+          if (!id(clock_time).now().is_valid()) {
+            ESP_LOGI("time_sync", "Time invalid, restarting SNTP...");
+            id(clock_time).update();
+          } else {
+            ESP_LOGI("time_sync", "Time is already valid.");
+          }
+
+text:
+ - platform: template
+   mode: text
+   name: "MQTT address"
+   id: "mqtt_address"
+   icon: "mdi:text"
+   optimistic: true
+   internal: false
+   entity_category: config
+   initial_value: ""
+   restore_value: true
+   on_value:
+      then:
+        - logger.log:
+            format: "%s"
+            args: ["x.c_str()"]
+            
+ - platform: template
+   mode: text
+   name: "MQTT username"
+   id: "mqtt_username"
+   icon: "mdi:text"
+   optimistic: true
+   entity_category: config
+   internal: false
+   initial_value: ""
+   restore_value: true
+   on_value:
+      then:
+        - logger.log:
+            format: "%s"
+            args: ["x.c_str()"]
+
+ - platform: template
+   mode: password
+   name: "MQTT password"
+   id: "mqtt_password"
+   icon: "mdi:text"
+   optimistic: true
+   entity_category: config
+   internal: false
+   initial_value: ""
+   restore_value: true
+   on_value:
+      then:
+        - logger.log:
+            format: "%s"
+            args: ["x.c_str()"]
+
+
+# globals:
+#   - id: top_left_alert_status
+#     type: bool
+#     initial_value: "0"
+
+#   - id: top_right_alert_status
+#     type: bool
+#     initial_value: "0"
+
+#   - id: bottom_left_alert_status
+#     type: bool
+#     initial_value: "0"
+
+#   - id: bottom_right_alert_status
+#     type: bool
+#     initial_value: "0"
+
+# animation:
+#   - id: my_animation
+#     file: "icons/sunny.svg"
+#     type: RGB565
+
+    # - file: img/cat-space.gif
+    #   id: cat_space
+    #   type: RGB565
+    #   resize: 128x64  # або розмір твого дисплея
