@@ -6,9 +6,8 @@ esphome:
   name: ${name}
   friendly_name: ${full_name}
   platformio_options:
+    # build_flags: "-DBOARD_HAS_PSRAM"
     board_build.flash_mode: dio
-  #includes:
-  #  - my_clock.h
   on_boot:
     - priority: -600
       then:
@@ -22,6 +21,9 @@ esphome:
         - delay: 2s
         - script.execute: init_mqtt
         - display.page.show: page2
+        - lambda: |-            
+            id(my_dfplayer).init();
+            ESP_LOGD("DEBUG", "Initialization done");
     - priority: 800
       then:
         - lambda: |-
@@ -34,6 +36,11 @@ esp32:
   board: esp32-s3-devkitc-1
   framework:
     type: arduino
+  # flash_size: 16MB
+
+# psram:
+#   mode: octal
+#   speed: 80MHz
 
 external_components:
   - source:
@@ -64,9 +71,9 @@ wifi:
 
 captive_portal:
 
-web_server:
-  port: 80
-  version: 3
+# web_server:
+#   port: 80
+#   version: 3
 
 # 4 pins serial port: GND-RX-TX-5V (bottom to top, 5V pin has the little triangle next to it)
 # U0RXD: GPIO44
@@ -88,7 +95,7 @@ dfplayer_pro:
   # set_prompt: false
 
 # api:
-#   reboot_timeout: 0s
+#    reboot_timeout: 0s
    
 mqtt:
    # discovery: false
@@ -97,16 +104,36 @@ mqtt:
    username: "mqtt"
    password: "mqtt"
    enable_on_boot: False
-  #  on_connect:
+   reboot_timeout: 0s 
   #   - lambda: |-
   #       id(mqtt_broker).subscribe_json("${name}/service/apps/#", [=](const std::string &topic, JsonObject root) {
   #           ESP_LOGD("DEBUG", "APP %s : Payload  %s" , getLastSegment(topic).c_str(), root);
   #       });
 
    on_json_message:
+    - topic: ${name}/service/play_init
+      qos: 0
+      then:
+        - lambda: |-
+            id(my_dfplayer).init();
+
+    - topic: ${name}/service/play_volume
+      qos: 0
+      then:
+        - lambda: |-
+            id(my_dfplayer).set_volume(x["volume"].as<int>());
+
     - topic: ${name}/service/play_sound
       qos: 0
       then:
+        - lambda: |-
+            id(my_dfplayer).play_file_no(x["file_no"].as<int>())  ;
+
+    - topic: ${name}/service/play_file
+      qos: 0
+      then:
+        - lambda: |-
+            id(my_dfplayer).play_file(x["file_name"].as<std::string>())  ;
 
     - topic: ${name}/service/climate
       qos: 0
@@ -259,13 +286,33 @@ font:
       - "\U000F04B2" # mdi:sleep
       - "\U000F1B94" # mdi:bed-clock
 
-  - file: "fonts/Monocraft-Light.ttf"
+  # BetterVCR.ttf 
+  # Silkscreen.ttf 
+  # TDATextCondensed.ttf 
+
+  # - file: "fonts/Monocraft-Light.ttf"
+  #   size: 18
+  #   id: roboto
+  #   bpp: 1
+  #   glyphsets:
+  #     - GF_Cyrillic_Core
+  #     - GF_Latin_Core
+
+  - file: "fonts/MatrixChunky16X.bdf"
+    size: 2
     id: roboto
-    size: 18
     bpp: 1
     glyphsets:
       - GF_Cyrillic_Core
       - GF_Latin_Core
+
+  # - file: "fonts/MatrixChunky16X.ttf"
+  #   size: 16
+  #   id: roboto
+  #   bpp: 1
+  #   glyphsets:
+  #     - GF_Cyrillic_Core
+  #     - GF_Latin_Core
 
   - file: "fonts/MatrixChunky8X.ttf"
     id: default_font
@@ -305,15 +352,6 @@ color:
   - id: white
     hex: FFFFFF
 
-interval:
-   - interval: 5s
-     then:
-      - lambda: |-
-          auto apps = id(clock_core).get_app_loop();
-          id(mqtt_broker).publish("${name}/app-loop", apps.c_str());
-
-
-
 # interval:
 #    - interval: 66ms
 #      then:
@@ -351,23 +389,22 @@ interval:
 #define WF2_USB_DP_PIN 20
 
 display:
-  - platform: hub75_matrix_display
+  - platform:  hub75_matrix_display
     id: matrix
     width: 128
     height: 64
+
     chain_length: 1    
     brightness: 30
 
-    # R1_pin: 2
-    # R2_pin: 3
-    B1_pin: 2
-    B2_pin: 3
-    G1_pin: 6
-    G2_pin: 7
-    # B1_pin: 10
-    # B2_pin: 11
     R1_pin: 10
+    G1_pin: 6
+    B1_pin: 2
+    
     R2_pin: 11
+    G2_pin: 7
+    B2_pin: 3    
+    
     A_pin: 39
     B_pin: 38
     C_pin: 37
@@ -379,9 +416,10 @@ display:
 
     driver: icn2038s
     clock_phase: false
-    i2sspeed: HZ_20M
-    update_interval: 8ms
+    i2sspeed: HZ_10M    
     latch_blanking: 4
+
+    update_interval: 8ms
 
     pages:
       - id: page1
@@ -391,9 +429,8 @@ display:
 
       - id: page2
         lambda: |-
-          id(clock_core).render_main_screen(it);
-          id(clock_core).render_app_screen(it);
-          // it.filled_rectangle(0, 0, it.get_width(), it.get_height(), id(red));
+            id(clock_core).render_main_screen(it);
+            id(clock_core).render_app_screen(it);
 
       - id: page3
         lambda: |-
@@ -402,180 +439,203 @@ display:
 display_tools:
  id: clock_core
  clock_time: clock_time
+ on_play_sound:
+    then:
+      - lambda: |-
+          id(my_dfplayer).play_file_no(x);
 
-switch:
-  - platform: hub75_matrix_display
-    matrix_id: matrix
-    restore_mode: ALWAYS_ON
-    name: "Power"
-    id: power
-
-  - platform: restart
-    name: "Restart"
-
-  - platform: template
-    name: "Night mode"
-    id: night_mode
-    icon: mdi:sleep
-    optimistic: true
-
-  - platform: template
-    name: "Top left alert"
-    id: top_left_alert
-    icon: mdi:arrow-top-left-thick
-    lambda: |-
-      return id(clock_core).get_top_left();
-    turn_on_action:
-      then:
-          lambda: |-
-            id(clock_core).set_top_left(true);
-    turn_off_action:
-      then:
-          lambda: |-
-            id(clock_core).set_top_left(false);
-
-  - platform: template
-    name: "Top right alert"
-    id: top_right_alert
-    icon: mdi:arrow-top-right-thick
-    lambda: |-
-      return id(clock_core).get_top_right();
-    turn_on_action:
-      then:
-          lambda: |-
-            id(clock_core).set_top_right(true);
-    turn_off_action:
-      then:
-          lambda: |-
-            id(clock_core).set_top_right(false);
-
-  - platform: template
-    name: "Bottom right alert"
-    id: bottom_right_alert
-    icon: mdi:arrow-bottom-right-thick
-    lambda: |-
-      return id(clock_core).get_bottom_right(); 
-    turn_on_action:
-      then:
-          lambda: |-
-            id(clock_core).set_bottom_right(true);
-    turn_off_action:
-      then:
-          lambda: |-
-            id(clock_core).set_bottom_right(false);
-
-  - platform: template
-    name: "Bottom left alert"
-    id: bottom_left_alert
-    icon: mdi:arrow-bottom-left-thick
-    lambda: |-
-      return id(clock_core).get_bottom_left();
-    turn_on_action:
-      then:
-        lambda: |-
-            id(clock_core).set_bottom_left(true);
-    turn_off_action:
-      then:
-        lambda: |-
-            id(clock_core).set_bottom_left(false);
-
-number:
-  - platform: hub75_matrix_display
-    matrix_id: matrix
-    name: "Brightness"
+interval:
+   - interval: 5s
+     then:
+      - lambda: |-
+          auto apps = id(clock_core).get_app_loop();
+          id(mqtt_broker).publish("${name}/app-loop", apps.c_str());
 
 script:
-  - id: refresh_display
-    mode: restart
-    then:
-      - component.update: matrix
+   - id: refresh_display
+     mode: restart
+     then:
+       - component.update: matrix
 
-  - id: init_mqtt
-    then:
-      - lambda: |-
-          if(!id(mqtt_address).state.empty()){
-            id(mqtt_broker).set_broker_address(id(mqtt_address).state.c_str());
-            id(mqtt_broker).set_username(id(mqtt_username).state.c_str());
-            id(mqtt_broker).set_password(id(mqtt_password).state.c_str());
-            id(mqtt_broker).enable();
-          }
+   - id: init_mqtt
+     then:
+       - lambda: |-
+           if(!id(mqtt_address).state.empty()){
+             id(mqtt_broker).set_broker_address(id(mqtt_address).state.c_str());
+             id(mqtt_broker).set_username(id(mqtt_username).state.c_str());
+             id(mqtt_broker).set_password(id(mqtt_password).state.c_str());
+             id(mqtt_broker).enable();
+           }
 
-  - id: force_time_sync
-    then:
-      - lambda: |-
-          if (!id(clock_time).now().is_valid()) {
-            ESP_LOGI("time_sync", "Time invalid, restarting SNTP...");
-            id(clock_time).update();
-          } else {
-            ESP_LOGI("time_sync", "Time is already valid.");
-          }
+   - id: force_time_sync
+     then:
+       - lambda: |-
+           if (!id(clock_time).now().is_valid()) {
+             ESP_LOGI("time_sync", "Time invalid, restarting SNTP...");
+             id(clock_time).update();
+           } else {
+             ESP_LOGI("time_sync", "Time is already valid.");
+           }
+
+switch:
+   - platform: hub75_matrix_display
+     matrix_id: matrix
+     restore_mode: ALWAYS_ON
+     name: "Power"
+     id: power
+
+   - platform: restart
+     name: "Restart"
+
+   - platform: template
+     name: "Night mode"
+     id: night_mode
+     icon: mdi:sleep
+     optimistic: true
+     lambda: |-
+       return id(clock_core).get_night_mode();
+
+     turn_on_action:
+       then:
+           lambda: |-
+             id(clock_core).set_night_mode(true);
+     turn_off_action:
+       then:
+           lambda: |-
+             id(clock_core).set_night_mode(false);    
+
+   - platform: template
+     name: "Top left alert"
+     id: top_left_alert
+     icon: mdi:arrow-top-left-thick
+     lambda: |-
+       return id(clock_core).get_top_left();
+     turn_on_action:
+       then:
+           lambda: |-
+             id(clock_core).set_top_left(true);
+     turn_off_action:
+       then:
+           lambda: |-
+             id(clock_core).set_top_left(false);
+
+   - platform: template
+     name: "Top right alert"
+     id: top_right_alert
+     icon: mdi:arrow-top-right-thick
+     lambda: |-
+       return id(clock_core).get_top_right();
+     turn_on_action:
+       then:
+           lambda: |-
+             id(clock_core).set_top_right(true);
+     turn_off_action:
+       then:
+           lambda: |-
+             id(clock_core).set_top_right(false);
+
+   - platform: template
+     name: "Bottom right alert"
+     id: bottom_right_alert
+     icon: mdi:arrow-bottom-right-thick
+     lambda: |-
+       return id(clock_core).get_bottom_right(); 
+     turn_on_action:
+       then:
+           lambda: |-
+             id(clock_core).set_bottom_right(true);
+     turn_off_action:
+       then:
+           lambda: |-
+             id(clock_core).set_bottom_right(false);
+
+   - platform: template
+     name: "Bottom left alert"
+     id: bottom_left_alert
+     icon: mdi:arrow-bottom-left-thick
+     lambda: |-
+       return id(clock_core).get_bottom_left();
+     turn_on_action:
+       then:
+         lambda: |-
+             id(clock_core).set_bottom_left(true);
+     turn_off_action:
+       then:
+         lambda: |-
+             id(clock_core).set_bottom_left(false);
+
+number:
+   - platform: hub75_matrix_display
+     matrix_id: matrix
+     id: brightness
+     name: "Brightness"
+
+  #  - platform: template
+  #    name: "Scroll speed"
+  #    id: scroll_speed
+  #    min_value: 60.0
+  #    max_value: 200.0
+  #    step: 1
+  #    lambda: |-
+  #      return id(clock_core).get_scroll_speed();
+  #    set_action:
+  #      lambda: |-
+  #        id(clock_core).set_scroll_speed(x);  
 
 text:
- - platform: template
-   mode: text
-   name: "MQTT address"
-   id: "mqtt_address"
-   icon: "mdi:text"
-   optimistic: true
-   internal: false
-   entity_category: config
-   initial_value: ""
-   restore_value: true
-   on_value:
-      then:
-        - logger.log:
-            format: "%s"
-            args: ["x.c_str()"]
+  - platform: template
+    mode: text
+    name: "MQTT address"
+    id: "mqtt_address"
+    icon: "mdi:text"
+    optimistic: true
+    internal: false
+    entity_category: config
+    initial_value: ""
+    restore_value: true
+    on_value:
+       then:
+         - logger.log:
+             format: "%s"
+             args: ["x.c_str()"]
             
- - platform: template
-   mode: text
-   name: "MQTT username"
-   id: "mqtt_username"
-   icon: "mdi:text"
-   optimistic: true
-   entity_category: config
-   internal: false
-   initial_value: ""
-   restore_value: true
-   on_value:
-      then:
-        - logger.log:
-            format: "%s"
-            args: ["x.c_str()"]
+  - platform: template
+    mode: text
+    name: "MQTT username"
+    id: "mqtt_username"
+    icon: "mdi:text"
+    optimistic: true
+    entity_category: config
+    internal: false
+    initial_value: ""
+    restore_value: true
+    on_value:
+       then:
+         - logger.log:
+             format: "%s"
+             args: ["x.c_str()"]
 
- - platform: template
-   mode: password
-   name: "MQTT password"
-   id: "mqtt_password"
-   icon: "mdi:text"
-   optimistic: true
-   entity_category: config
-   internal: false
-   initial_value: ""
-   restore_value: true
-   on_value:
-      then:
-        - logger.log:
-            format: "%s"
-            args: ["x.c_str()"]
-
+  - platform: template
+    mode: password
+    name: "MQTT password"
+    id: "mqtt_password"
+    icon: "mdi:text"
+    optimistic: true
+    entity_category: config
+    internal: false
+    initial_value: ""
+    restore_value: true
+    on_value:
+       then:
+         - logger.log:
+             format: "%s"
+             args: ["x.c_str()"]
 
 # globals:
-#   - id: top_left_alert_status
-#     type: bool
-#     initial_value: "0"
-
-#   - id: top_right_alert_status
-#     type: bool
-#     initial_value: "0"
-
-#   - id: bottom_left_alert_status
-#     type: bool
-#     initial_value: "0"
-
-#   - id: bottom_right_alert_status
-#     type: bool
-#     initial_value: "0"
+#   - id: scroll_speed_value
+#     type: float
+#     restore_value: yes
+#     initial_value: '80.0'
 
 # animation:
 #   - id: my_animation

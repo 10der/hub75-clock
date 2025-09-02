@@ -1,6 +1,7 @@
 // display_tools.cpp
 #include "display_tools.h"
 #include <string>
+#include <sstream>
 #include <vector>
 #include <queue>
 #include <map>
@@ -13,6 +14,43 @@
 
 namespace esphome {
 namespace display_tools {
+
+inline std::string trim(const std::string &s) {
+  auto start = std::find_if_not(s.begin(), s.end(), ::isspace);
+  auto end = std::find_if_not(s.rbegin(), s.rend(), ::isspace).base();
+  return (start < end) ? std::string(start, end) : "";
+}
+
+std::string strip_emojis(const std::string &input) {
+  std::string result;
+  for (size_t i = 0; i < input.size();) {
+    unsigned char c = input[i];
+
+    // ASCII
+    if (c < 0x80) {
+      result += c;
+      i++;
+    }
+    // 2-байтові символи UTF-8 (U+0080..U+07FF)
+    else if ((c & 0xE0) == 0xC0 && i + 1 < input.size()) {
+      result.append(input, i, 2);
+      i += 2;
+    }
+    // 3-байтові символи UTF-8 (U+0800..U+FFFF) — залишаємо
+    else if ((c & 0xF0) == 0xE0 && i + 2 < input.size()) {
+      result.append(input, i, 3);
+      i += 3;
+    }
+    // 4-байтові (U+10000 і вище, тобто емодзі) — пропускаємо
+    else if ((c & 0xF8) == 0xF0 && i + 3 < input.size()) {
+      i += 4;  // ❌ emoji, скіпаємо
+    } else {
+      // некоректний байт
+      i++;
+    }
+  }
+  return result;
+}
 
 // ---------- Життєвий цикл ESPHome ----------
 void DisplayTools::setup() {
@@ -226,6 +264,11 @@ void DisplayTools::addApp(std::string name, std::string body, std::string color,
                           std::string icon_color, std::vector<ColoredWord> text_parts,
                           std::vector<DrawObject> draw_objects) {
   App_Info *found = getAppByName_(name);
+
+  if (!body.empty()) {
+    body = cyr_upper(body);
+  }
+
   if (found != nullptr) {
     found->body = body;
     found->color = hex_to_color(color);
@@ -296,12 +339,18 @@ void DisplayTools::reorderAppsByIndex() {
 }
 
 std::string DisplayTools::get_app_loop() {
-  return esphome::json::build_json([this](JsonVariant root) {
-    JsonArray arr = root.to<JsonArray>();
-    for (auto &app : this->apps_) {
-      arr.add(app.name);
+  std::string result = "[";
+  bool first = true;
+  for (const auto &app : this->apps_) {
+    if (!first) {
+      result += ",";
+    } else {
+      first = false;
     }
-  });
+    result += "\"" + app.name + "\"";
+  }
+  result += "]";
+  return result;
 }
 
 // ======================================================================
@@ -311,9 +360,8 @@ void DisplayTools::addAlert(std::string text, std::string color, std::string ico
                             std::string sound, uint16_t repeat) {
   AlertMessage alert;
 
-  if (text.length() > 255) {
-    text = truncate_utf8_string(text, 255) + "[...]";
-  }
+  text = strip_emojis(text);
+  text = trim(text);
 
   alert.text = cyr_upper(text);
 
@@ -329,7 +377,7 @@ void DisplayTools::addAlert(std::string text, std::string color, std::string ico
     icon_color = "FF0000";
   }
   if (sound.empty()) {
-    sound = "18";
+    sound = "14";
   }
 
   alert.color = hex_to_color(color);
@@ -354,6 +402,7 @@ bool DisplayTools::getCurrentAlert(AlertMessage &out) {
 void DisplayTools::removeCurrentAlert() {
   if (!alert_messages_queue_.empty())
     alert_messages_queue_.pop();
+  first_alert_play_ = true;
 }
 
 // ======================================================================
@@ -381,7 +430,7 @@ bool DisplayTools::drawTodayDate(Display &it, BaseFont *font, int xpos, int ypos
   it.filled_rectangle(xpos, ypos - 16, 8 * 3, 2 * 3, Color(240, 0, 0));
 
   // число місяця
-  it.printf(xpos + 1, ypos + 6, font, Color::BLACK, TextAlign::BASELINE_LEFT, "%02d", day_of_month);
+  it.printf(xpos + 5, ypos + 7, font, Color::BLACK, TextAlign::BASELINE_LEFT, "%02d", day_of_month);
 
   // рисочки днів тижня
   int dash_x_start = xpos + 32;
@@ -396,11 +445,24 @@ bool DisplayTools::drawTodayDate(Display &it, BaseFont *font, int xpos, int ypos
   }
 
   // назва місяця укр (точно як у тебе, з пробілами)
-  const std::vector<std::string> months_uk = {"",         "Січень  ", "Лютий   ", "Березень", "Квітень ",
-                                              "Травень ", "Червень ", "Липень  ", "Серпень ", "Вересень",
-                                              "Жовтень ", "Листопад", "Грудень "};
+  const std::vector<std::string> months_uk = {"",        "Січень",   "Лютий",  "Березень", "Квітень",
+                                              "Травень", "Червень",  "Липень", "Серпень",  "Вересень",
+                                              "Жовтень", "Листопад", "Грудень"};
   std::string month = months_uk[local_time ? (local_time->tm_mon + 1) : 0];
-  it.print(xpos + 30, ypos, font, Color::WHITE, TextAlign::BASELINE_LEFT, month.c_str());
+
+  const int left_boundary = 32;
+
+  int text_width, text_height;
+  int dummy_y, dummy_x, dummy_h;
+  month = cyr_upper(month);
+  it.get_text_bounds(0, ypos, month.c_str(), font, TextAlign::BASELINE_LEFT, &dummy_x, &dummy_y, &text_width,
+                     &text_height);
+
+  const int available_width = it.get_width() - left_boundary - 12;
+
+  // it.print(xpos + 32, ypos + 4, font, Color::WHITE, TextAlign::BASELINE_LEFT, month.c_str());
+  const int center_x = left_boundary + (available_width - text_width) / 2;
+  it.print(center_x, ypos + 3, font, Color::WHITE, TextAlign::BASELINE_LEFT, month.c_str());
 
   // затримка на кадрах
   frame_hold++;
@@ -411,6 +473,8 @@ bool DisplayTools::drawTodayDate(Display &it, BaseFont *font, int xpos, int ypos
   return false;
 }
 
+// ORIGINAL
+/*
 bool DisplayTools::drawScrollingTextWithIcon(Display &it, const std::string &text, const Color &textColor,
                                              const std::string &icon, const Color &iconColor, BaseFont *fontText,
                                              BaseFont *fontIcon, int repeat) {
@@ -487,6 +551,264 @@ bool DisplayTools::drawScrollingTextWithIcon(Display &it, const std::string &tex
   xpos--;
 
   return false;
+}
+*/
+
+/*
+// ORIGINAL + FIXED SCROLL
+bool DisplayTools::drawScrollingTextWithIcon(Display &it, const std::string &text, const Color &textColor,
+                                             const std::string &icon, const Color &iconColor, BaseFont *fontText,
+                                             BaseFont *fontIcon, int repeat) {
+    // ---- Статичні змінні для стану
+    static std::string last_text;
+    static bool scrolling = false;
+    static float xpos = 0.0f;          // float для субпіксельного руху
+    static int16_t xrepeat = 0;
+    static int text_width = 0, text_height = 0;
+
+    static uint32_t last_step_us = 0;   // мікросекунди для точності
+    static uint32_t hold_start_ms = 0;
+    static float scroll_accum = 0.0f;   // накопичення дробових пікселів
+
+    const int ypos = 56;
+
+    // ---- Іконка зліва
+    int left_boundary = 0;
+    if (!icon.empty()) {
+        it.print(0, ypos, fontIcon, iconColor, TextAlign::BASELINE_LEFT, icon.c_str());
+        int icon_w, dummy_h, dummy_x, dummy_y;
+        it.get_text_bounds(0, ypos, icon.c_str(), fontIcon, TextAlign::BASELINE_LEFT,
+                           &dummy_x, &dummy_y, &icon_w, &dummy_h);
+        left_boundary = icon_w + 1;
+    }
+    const int available_width = it.get_width() - left_boundary;
+
+    // ---- Якщо текст змінився — скинути все
+    if (text != last_text) {
+        last_text = text;
+        int dummy_x, dummy_y;
+        it.get_text_bounds(0, ypos, text.c_str(), fontText, TextAlign::BASELINE_LEFT,
+                           &dummy_x, &dummy_y, &text_width, &text_height);
+        scrolling = (text_width > available_width);
+        xrepeat   = 0;
+        xpos      = static_cast<float>(it.get_width());
+        last_step_us  = micros();
+        hold_start_ms = millis();
+        scroll_accum  = 0.0f;
+    }
+
+    // ---- Якщо текст влазить — просто показати і потримати N мс
+    if (!scrolling) {
+        const uint32_t hold_ms = 2000u * repeat;
+        const int center_x = left_boundary + (available_width - text_width) / 2;
+        it.print(center_x, ypos, fontText, textColor, TextAlign::BASELINE_LEFT, text.c_str());
+        if ((millis() - hold_start_ms) >= hold_ms) {
+            last_text.clear();
+            return true;
+        }
+        return false;
+    }
+
+    // ---- Рух: стабільний px/sec з накопиченням дробової частини
+    uint32_t now_us = micros();
+    uint32_t dt_us  = now_us - last_step_us;
+    scroll_accum += scroll_speed_ * (static_cast<float>(dt_us) / 1000000.0f);
+
+    int move = static_cast<int>(scroll_accum);   // скільки цілих пікселів рухати
+    if (move != 0) {
+        xpos -= move;
+        scroll_accum -= move;                      // залишаємо дробову частину
+        last_step_us = now_us;
+    }
+
+    // ---- Кліпінг
+    it.start_clipping(left_boundary, ypos - text_height, it.get_width(), ypos + text_height);
+    auto clip = it.get_clipping();
+    const int clipping_left  = clip.x;
+    const int clipping_right = clip.x + clip.w;
+    const int reset_threshold = clipping_left - text_width;
+
+    // ---- Коли текст вийшов за межі
+    if (xpos < reset_threshold) {
+        xpos = static_cast<float>(clipping_right);
+        xrepeat++;
+        if (xrepeat >= repeat) {
+            last_text.clear();
+            xrepeat = 0;
+            scrolling = false;
+            it.end_clipping();
+            return true;
+        }
+    }
+
+    // ---- Малюємо
+    it.print(static_cast<int>(xpos), ypos, fontText, textColor, TextAlign::BASELINE_LEFT, text.c_str());
+    it.end_clipping();
+    return false;
+}
+*/
+
+// FIXED SCROLL: таймерний піксельний крок (без тремтіння)
+bool DisplayTools::drawScrollingTextWithIcon(Display &it, const std::string &text, const Color &textColor,
+                                             const std::string &icon, const Color &iconColor, BaseFont *fontText,
+                                             BaseFont *fontIcon, int repeat) {
+  // ---- Статичні змінні для стану
+  static std::string last_text;
+  static bool scrolling = false;
+  static int xpos = 0;
+  static int16_t xrepeat = 0;
+  static int text_width = 0, text_height = 0;
+
+  static uint32_t hold_start_ms = 0;
+  static uint32_t last_px_step = 0;  // таймер для руху
+  const int ypos = 56;
+
+  // ---- Іконка зліва
+  int left_boundary = 0;
+  if (!icon.empty()) {
+    it.print(0, ypos, fontIcon, iconColor, TextAlign::BASELINE_LEFT, icon.c_str());
+    int icon_w, dummy_h, dummy_x, dummy_y;
+    it.get_text_bounds(0, ypos, icon.c_str(), fontIcon, TextAlign::BASELINE_LEFT, &dummy_x, &dummy_y, &icon_w,
+                       &dummy_h);
+    left_boundary = icon_w + 1;
+  }
+  const int available_width = it.get_width() - left_boundary;
+
+  // ---- Якщо текст змінився — скинути все
+  if (text != last_text) {
+    last_text = text;
+    int dummy_x, dummy_y;
+    it.get_text_bounds(0, ypos, text.c_str(), fontText, TextAlign::BASELINE_LEFT, &dummy_x, &dummy_y, &text_width,
+                       &text_height);
+    scrolling = (text_width > available_width);
+    xrepeat = 0;
+    xpos = it.get_width();  // старт справа за екраном
+    hold_start_ms = millis();
+    last_px_step = millis();
+  }
+
+  // ---- Якщо текст влазить — просто показати і потримати N мс
+  if (!scrolling) {
+    const uint32_t hold_ms = 2000u * repeat;
+    const int center_x = left_boundary + (available_width - text_width) / 2;
+    it.print(center_x, ypos, fontText, textColor, TextAlign::BASELINE_LEFT, text.c_str());
+    if ((millis() - hold_start_ms) >= hold_ms) {
+      last_text.clear();
+      return true;
+    }
+    return false;
+  }
+
+  const float scroll_speed = 100;  // пікселів за секунду
+  // int step = std::max(1, static_cast<int>(scroll_speed / 60.0f));
+
+  // ---- Рух: стабільний крок по таймеру
+  const uint32_t px_interval = 1000 / scroll_speed;  // мс на 1 піксель
+  if (millis() - last_px_step >= px_interval) {
+    xpos -= 1;
+    last_px_step = millis();
+  }
+
+  // ---- Кліпінг
+  it.start_clipping(left_boundary, ypos - text_height, it.get_width(), ypos + text_height);
+  auto clip = it.get_clipping();
+  const int clipping_left = clip.x;
+  const int clipping_right = clip.x + clip.w;
+  const int reset_threshold = clipping_left - text_width;
+
+  // ---- Коли текст вийшов за межі
+  if (xpos < reset_threshold) {
+    xpos = clipping_right;
+    xrepeat++;
+    if (xrepeat >= repeat) {
+      last_text.clear();
+      xrepeat = 0;
+      scrolling = false;
+      it.end_clipping();
+      return true;
+    }
+  }
+
+  // ---- Малюємо
+  it.print(xpos, ypos, fontText, textColor, TextAlign::BASELINE_LEFT, text.c_str());
+  it.end_clipping();
+  return false;
+}
+
+bool DisplayTools::drawPagedTextWithIcon(Display &it, const std::string &text, const Color &textColor,
+                                         const std::string &icon, const Color &iconColor, BaseFont *fontText,
+                                         BaseFont *fontIcon, int repeat) {
+  static std::vector<std::string> pages;
+  static size_t current_page = 0;
+  static std::string last_text;
+  static uint32_t hold_start_ms = 0;
+  const int ypos = 56;
+
+  // ---- Іконка
+  int left_boundary = 0;
+  if (!icon.empty()) {
+    it.print(0, ypos, fontIcon, iconColor, TextAlign::BASELINE_LEFT, icon.c_str());
+    int icon_w, dummy_h, dummy_x, dummy_y;
+    it.get_text_bounds(0, ypos, icon.c_str(), fontIcon, TextAlign::BASELINE_LEFT, &dummy_x, &dummy_y, &icon_w,
+                       &dummy_h);
+    left_boundary = icon_w + 1;
+  }
+  const int available_width = it.get_width() - left_boundary;
+
+  // ---- Якщо текст новий — розбити на сторінки
+  if (text != last_text) {
+    last_text = text;
+    pages.clear();
+    current_page = 0;
+
+    std::istringstream iss(text);
+    std::string word, line;
+    int line_width = 0;
+
+    while (iss >> word) {
+      std::string test_line = line.empty() ? word : line + " " + word;
+      int dummy_x, dummy_y, test_w, test_h;
+      it.get_text_bounds(0, ypos, test_line.c_str(), fontText, TextAlign::BASELINE_LEFT, &dummy_x, &dummy_y, &test_w,
+                         &test_h);
+
+      if (test_w <= available_width) {
+        line = test_line;
+        line_width = test_w;
+      } else {
+        if (!line.empty())
+          pages.push_back(line);
+        line = word;
+      }
+    }
+    if (!line.empty())
+      pages.push_back(line);
+
+    hold_start_ms = millis();
+  }
+
+  // ---- Показати поточну сторінку
+  if (current_page < pages.size()) {
+    const std::string &page_text = pages[current_page];
+    int dummy_x, dummy_y, text_w, text_h;
+    it.get_text_bounds(0, ypos, page_text.c_str(), fontText, TextAlign::BASELINE_LEFT, &dummy_x, &dummy_y, &text_w,
+                       &text_h);
+
+    const int center_x = left_boundary + (available_width - text_w) / 2;
+    it.print(center_x, ypos, fontText, textColor, TextAlign::BASELINE_LEFT, page_text.c_str());
+
+    const uint32_t hold_ms = 2000u * repeat;
+    if ((millis() - hold_start_ms) >= hold_ms) {
+      current_page++;
+      hold_start_ms = millis();
+    }
+    return false;
+  }
+
+  // ---- Кінець
+  last_text.clear();
+  pages.clear();
+  current_page = 0;
+  return true;
 }
 
 bool DisplayTools::drawScrollingTextWithIcon(Display &it, const std::vector<ColoredWord> &textParts,
@@ -809,11 +1131,37 @@ void DisplayTools::render_app_screen(display::Display &it) {
   // Alerts мають пріоритет
   AlertMessage alert;
   if (this->getCurrentAlert(alert)) {
-    bool done = this->drawScrollingTextWithIcon(it, alert.text, alert.color, alert.icon, alert.icon_color,
-                                                this->app_font_, this->icon_font_, alert.repeat);
+    if (first_alert_play_) {
+      char *endptr = nullptr;
+      long val = strtol(alert.sound.c_str(), &endptr, 10);
+
+      if (endptr != alert.sound.c_str() && *endptr == '\0') {
+        emit_on_play_sound(static_cast<int>(val));
+      } else {
+        ESP_LOGW("display_tools", "Invalid number string: '%s'", alert.sound.c_str());
+      }
+
+      first_alert_play_ = false;
+    }
+    bool done = false;
+    if (alert.text.length() > 255) {
+      done = this->drawPagedTextWithIcon(it, alert.text, alert.color, alert.icon, alert.icon_color, this->app_font_,
+                                             this->icon_font_, alert.repeat);
+    } else {
+      done = this->drawScrollingTextWithIcon(it, alert.text, alert.color, alert.icon, alert.icon_color, this->app_font_,
+                                         this->icon_font_, alert.repeat);
+    }
+
     if (done) {
       this->removeCurrentAlert();
     }
+    return;
+  }
+
+  if (this->night_mode_state_) {
+    // Якщо нічний режим, то не показувати сповіщення
+    it.print((it.get_width() / 2) - 10, 57, this->icon_font_, RED, TextAlign::BASELINE_LEFT,
+             get_icon_char("mdi:bed-clock"));
     return;
   }
 
@@ -830,7 +1178,7 @@ void DisplayTools::render_app_screen(display::Display &it) {
                                            app->icon_color);
     } else {
       if (app->name == "__date__") {
-        done = drawTodayDate(it, this->app_font_, 2, 52);
+        done = drawTodayDate(it, this->app_font_, 0, 52);
       } else {
         done = this->drawScrollingTextWithIcon(it, app->body, app->color, app->icon, app->icon_color, this->app_font_,
                                                this->icon_font_, app->duration);
