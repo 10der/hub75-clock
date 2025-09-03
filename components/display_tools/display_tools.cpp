@@ -260,51 +260,6 @@ std::string DisplayTools::cyr_upper(const std::string &str) {
 // ======================================================================
 //                        КЕРУВАННЯ ДОДАТКАМИ (apps)
 // ======================================================================
-void DisplayTools::dump_app_info(const App_Info &info) {
-  ESP_LOGI("app_info", "=== App_Info Dump ===");
-
-  ESP_LOGI("app_info", "Name: %s", info.name.empty() ? "<null>" : info.name.c_str());
-  ESP_LOGI("app_info", "Body: %s", info.body.empty() ? "<null>" : info.body.c_str());
-  ESP_LOGI("app_info", "Duration: %u sec", info.duration);
-
-  ESP_LOGI("app_info", "Color: #%02X%02X%02X", info.color.r, info.color.g, info.color.b);
-  ESP_LOGI("app_info", "Icon: %s", info.icon.empty() ? "<null>" : info.icon.c_str());
-  ESP_LOGI("app_info", "Icon Color: #%02X%02X%02X", info.icon_color.r, info.icon_color.g, info.icon_color.b);
-
-  // Dump text_parts
-  if (info.text_parts.empty()) {
-    ESP_LOGI("app_info", "Text Parts: <empty>");
-  } else {
-    ESP_LOGI("app_info", "Text Parts:");
-    for (size_t i = 0; i < info.text_parts.size(); ++i) {
-      const auto &part = info.text_parts[i];
-      ESP_LOGI("app_info", "  [%u] \"%s\" color: #%02X%02X%02X", i,
-               part.text.c_str(), part.color.r, part.color.g, part.color.b);
-    }
-  }
-
-  // Dump draw_objects
-  if (info.draw_objects.empty()) {
-    ESP_LOGI("app_info", "Draw Objects: <empty>");
-  } else {
-    ESP_LOGI("app_info", "Draw Objects:");
-    for (size_t i = 0; i < info.draw_objects.size(); ++i) {
-      const auto &obj = info.draw_objects[i];
-      ESP_LOGI("app_info", "  [%u] Type: %d Pos: (%d,%d)-(%d,%d)-(%d,%d) Color: #%02X%02X%02X",
-               i, static_cast<int>(obj.type),
-               obj.x1, obj.y1, obj.x2, obj.y2, obj.x3, obj.y3,
-               obj.color.r, obj.color.g, obj.color.b);
-
-      if (obj.type == DrawCommandType::TEXT) {
-        ESP_LOGI("app_info", "       Text: \"%s\" Font: %p Align: %d",
-                 obj.text.c_str(), obj.font, static_cast<int>(obj.align));
-      }
-    }
-  }
-
-  ESP_LOGI("app_info", "=====================");
-}
-
 void DisplayTools::addApp(std::string name, std::string body, std::string color, uint16_t duration, std::string icon,
                           std::string icon_color, std::vector<ColoredWord> text_parts,
                           std::vector<DrawObject> draw_objects) {
@@ -323,7 +278,6 @@ void DisplayTools::addApp(std::string name, std::string body, std::string color,
     found->text_parts = std::move(text_parts);
     found->draw_objects = std::move(draw_objects);
     ESP_LOGI(TAG, "Updated app: %s", name.c_str());
-    dump_app_info(*found);
     return;
   }
 
@@ -341,9 +295,7 @@ void DisplayTools::addApp(std::string name, std::string body, std::string color,
   apps_.push_back(std::move(app));
   if (current_app_index_ == npos)
     current_app_index_ = 0;
-
   ESP_LOGI(TAG, "Added app: %s", name.c_str());
-  dump_app_info(*found);
 }
 
 bool DisplayTools::delApp(const std::string &name) {
