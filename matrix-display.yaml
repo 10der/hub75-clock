@@ -203,8 +203,94 @@ mqtt:
               {}                             // draw_objects
             );
           } else if (x["app_body_draw"]) {
-            JsonObjectConst app_body_draw = x["app_body_draw"];
-            // id(clock_core).addApp(app_name, "-", app_color, app_repeat, app_icon, app_icon_color, {}, jsonToDrawObjects(app_body_draw));
+            using esphome::display_tools::DrawObject;
+            using esphome::display_tools::DrawCommandType;
+
+            std::vector<DrawObject> cmds;
+
+            JsonVariantConst draw_variant = x["app_body_draw"];
+            if (!draw_variant.is<JsonArrayConst>()) {
+              ESP_LOGE("CORE", "Invalid draw commands format.");
+              return;
+            }
+
+            JsonArrayConst draw_commands = draw_variant.as<JsonArrayConst>();
+            auto default_font = static_cast<esphome::display::BaseFont *>(id(roboto));
+
+            for (JsonVariantConst cmd_variant : draw_commands) {
+              if (!cmd_variant.is<JsonObjectConst>()) continue;
+
+              JsonObjectConst cmd_obj = cmd_variant.as<JsonObjectConst>();
+              for (JsonPairConst kv : cmd_obj) {
+                std::string key = kv.key().c_str();
+
+                JsonVariantConst args_variant = kv.value();
+                if (!args_variant.is<JsonArrayConst>()) continue;
+                JsonArrayConst args = args_variant.as<JsonArrayConst>();
+
+                DrawObject obj;
+
+                if (key == "dp") {
+                  obj.type = DrawCommandType::PIXEL;
+                  obj.x1 = args[0].as<int>();
+                  obj.y1 = args[1].as<int>();
+                  obj.color = esphome::display_tools::DisplayTools::hex_to_color(args[2].as<std::string>());
+                } else if (key == "dl") {
+                  obj.type = DrawCommandType::LINE;
+                  obj.x1 = args[0].as<int>();
+                  obj.y1 = args[1].as<int>();
+                  obj.x2 = args[2].as<int>();
+                  obj.y2 = args[3].as<int>();
+                  obj.color = esphome::display_tools::DisplayTools::hex_to_color(args[4].as<std::string>());
+                } else if (key == "dr") {
+                  obj.type = DrawCommandType::RECTANGLE;
+                  obj.x1 = args[0].as<int>();
+                  obj.y1 = args[1].as<int>();
+                  obj.x2 = obj.x1 + args[2].as<int>();
+                  obj.y2 = obj.y1 + args[3].as<int>();
+                  obj.color = esphome::display_tools::DisplayTools::hex_to_color(args[4].as<std::string>());
+                } else if (key == "df") {
+                  obj.type = DrawCommandType::FILLED_RECTANGLE;
+                  obj.x1 = args[0].as<int>();
+                  obj.y1 = args[1].as<int>();
+                  obj.x2 = obj.x1 + args[2].as<int>();
+                  obj.y2 = obj.y1 + args[3].as<int>();
+                  obj.color = esphome::display_tools::DisplayTools::hex_to_color(args[4].as<std::string>());
+                } else if (key == "dc") {
+                  obj.type = DrawCommandType::CIRCLE;
+                  obj.x1 = args[0].as<int>();
+                  obj.y1 = args[1].as<int>();
+                  obj.x2 = args[2].as<int>();
+                  obj.color = esphome::display_tools::DisplayTools::hex_to_color(args[3].as<std::string>());
+                } else if (key == "dfc") {
+                  obj.type = DrawCommandType::FILLED_CIRCLE;
+                  obj.x1 = args[0].as<int>();
+                  obj.y1 = args[1].as<int>();
+                  obj.x2 = args[2].as<int>();
+                  obj.color = esphome::display_tools::DisplayTools::hex_to_color(args[3].as<std::string>());
+                } else if (key == "dt") {
+                  obj.type = DrawCommandType::TEXT;
+                  obj.x1 = args[0].as<int>();
+                  obj.y1 = args[1].as<int>();
+                  obj.text = args[2].as<std::string>();
+                  obj.color = esphome::display_tools::DisplayTools::hex_to_color(args[3].as<std::string>());
+                  obj.font = default_font;
+                } else if (key == "db") {
+                  obj.type = DrawCommandType::BITMAP;
+                  obj.x1 = args[0].as<int>(); // x
+                  obj.y1 = args[1].as<int>(); // y
+                  obj.x2 = args[2].as<int>(); // width
+                  obj.y2 = args[3].as<int>(); // height
+                  JsonArrayConst bmp_array = args[4].as<JsonArrayConst>();
+                  for (JsonVariantConst val : bmp_array) {
+                    obj.bitmap_data.push_back(val.as<uint8_t>());
+                  }
+                }
+                cmds.push_back(obj);
+              }
+            }
+            ESP_LOGI("CORE", "Draw commands count: %d", cmds.size());
+            id(clock_core).addApp(app_name, "-", app_color, app_repeat, app_icon, app_icon_color, {}, cmds);
           } else
           {
             // default
@@ -429,8 +515,7 @@ display:
 
       - id: page2
         lambda: |-
-            id(clock_core).render_main_screen(it);
-            id(clock_core).render_app_screen(it);
+            id(clock_core).render_screen(it);
 
       - id: page3
         lambda: |-

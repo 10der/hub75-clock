@@ -123,6 +123,10 @@ std::string DisplayTools::getLastSegment(const std::string &topic) {
 }
 
 Color DisplayTools::hex_to_color(const std::string &hex) {
+  if (hex.size() == 7 && hex[0] == '#') {
+    return hex_to_color(hex.substr(1));
+  }
+
   auto hex_char_to_int = [](char c) -> int {
     if (c >= '0' && c <= '9')
       return c - '0';
@@ -137,7 +141,7 @@ Color DisplayTools::hex_to_color(const std::string &hex) {
     int g = hex_char_to_int(hex[2]) * 16 + hex_char_to_int(hex[3]);
     int b = hex_char_to_int(hex[4]) * 16 + hex_char_to_int(hex[5]);
     return Color(r, g, b);
-  }
+  } 
   return Color::WHITE;
 }
 
@@ -260,6 +264,51 @@ std::string DisplayTools::cyr_upper(const std::string &str) {
 // ======================================================================
 //                        КЕРУВАННЯ ДОДАТКАМИ (apps)
 // ======================================================================
+
+void DisplayTools::dump_app_info(const App_Info &info) {
+  ESP_LOGI("app_info", "=== App_Info Dump ===");
+
+  ESP_LOGI("app_info", "Name: %s", info.name.empty() ? "<null>" : info.name.c_str());
+  ESP_LOGI("app_info", "Body: %s", info.body.empty() ? "<null>" : info.body.c_str());
+  ESP_LOGI("app_info", "Duration: %u sec", info.duration);
+
+  ESP_LOGI("app_info", "Color: #%02X%02X%02X", info.color.r, info.color.g, info.color.b);
+  ESP_LOGI("app_info", "Icon: %s", info.icon.empty() ? "<null>" : info.icon.c_str());
+  ESP_LOGI("app_info", "Icon Color: #%02X%02X%02X", info.icon_color.r, info.icon_color.g, info.icon_color.b);
+
+  // Dump text_parts
+  if (info.text_parts.empty()) {
+    ESP_LOGI("app_info", "Text Parts: <empty>");
+  } else {
+    ESP_LOGI("app_info", "Text Parts:");
+    for (size_t i = 0; i < info.text_parts.size(); ++i) {
+      const auto &part = info.text_parts[i];
+      ESP_LOGI("app_info", "  [%u] \"%s\" color: #%02X%02X%02X", i, part.text.c_str(), part.color.r, part.color.g,
+               part.color.b);
+    }
+  }
+
+  // Dump draw_objects
+  if (info.draw_objects.empty()) {
+    ESP_LOGI("app_info", "Draw Objects: <empty>");
+  } else {
+    ESP_LOGI("app_info", "Draw Objects:");
+    for (size_t i = 0; i < info.draw_objects.size(); ++i) {
+      const auto &obj = info.draw_objects[i];
+      ESP_LOGI("app_info", "  [%u] Type: %d Pos: (%d,%d)-(%d,%d)-(%d,%d) Color: #%02X%02X%02X", i,
+               static_cast<int>(obj.type), obj.x1, obj.y1, obj.x2, obj.y2, obj.x3, obj.y3, obj.color.r, obj.color.g,
+               obj.color.b);
+
+      if (obj.type == DrawCommandType::TEXT) {
+        ESP_LOGI("app_info", "       Text: \"%s\" Font: %p Align: %d", obj.text.c_str(), obj.font,
+                 static_cast<int>(obj.align));
+      }
+    }
+  }
+
+  ESP_LOGI("app_info", "=====================");
+}
+
 void DisplayTools::addApp(std::string name, std::string body, std::string color, uint16_t duration, std::string icon,
                           std::string icon_color, std::vector<ColoredWord> text_parts,
                           std::vector<DrawObject> draw_objects) {
@@ -278,6 +327,7 @@ void DisplayTools::addApp(std::string name, std::string body, std::string color,
     found->text_parts = std::move(text_parts);
     found->draw_objects = std::move(draw_objects);
     ESP_LOGI(TAG, "Updated app: %s", name.c_str());
+    dump_app_info(*found);
     return;
   }
 
@@ -292,10 +342,12 @@ void DisplayTools::addApp(std::string name, std::string body, std::string color,
   app.draw_objects = std::move(draw_objects);
   app.index = apps_.empty() ? 0 : (apps_.back().index + 1);
 
+  ESP_LOGI(TAG, "Added app: %s", name.c_str());
+  dump_app_info(app);
+
   apps_.push_back(std::move(app));
   if (current_app_index_ == npos)
     current_app_index_ = 0;
-  ESP_LOGI(TAG, "Added app: %s", name.c_str());
 }
 
 bool DisplayTools::delApp(const std::string &name) {
@@ -949,6 +1001,30 @@ bool DisplayTools::drawScrollingTextWithIcon(Display &it, const std::vector<Colo
   return false;
 }
 
+void DisplayTools::draw_bitmap_from_vector(esphome::display::Display &it, int x, int y, int w, int h,
+                             const std::vector<uint8_t> &bmp_data) {
+  if (w <= 0 || h <= 0) {
+    ESP_LOGE("DrawObjects", "Invalid bitmap dimensions.");
+    return;
+  }
+
+  // Перевірка, чи розмір вектора відповідає очікуваному
+  if (bmp_data.size() != w * h * 3) {
+    ESP_LOGE("DrawObjects", "Bitmap data size mismatch. Expected %d, got %d.", w * h * 3, bmp_data.size());
+    return;
+  }
+
+  for (int i = 0; i < h; i++) {
+    for (int j = 0; j < w; j++) {
+      int index = (i * w + j) * 3;
+      if (index + 2 < bmp_data.size()) {
+        esphome::Color color(bmp_data[index], bmp_data[index + 1], bmp_data[index + 2]);
+        it.draw_pixel_at(x + j, y + i, color);
+      }
+    }
+  }
+}
+
 bool DisplayTools::drawDrawObjects(Display &it, BaseFont *textFont, const std::vector<DrawObject> &objects) {
   for (const auto &cmd : objects) {
     switch (cmd.type) {
@@ -964,6 +1040,12 @@ bool DisplayTools::drawDrawObjects(Display &it, BaseFont *textFont, const std::v
       case DrawCommandType::VLINE:
         it.vertical_line(cmd.x1, cmd.y1, cmd.y2, cmd.color);
         break;
+      case DrawCommandType::CIRCLE:
+        it.circle(cmd.x1, cmd.y1, cmd.x2, cmd.color);  // x2 = radius        
+        break;
+      case DrawCommandType::FILLED_CIRCLE:
+        it.filled_circle(cmd.x1, cmd.y1, cmd.x2, cmd.color);  // x2 = radius
+        break;  
       case DrawCommandType::RECTANGLE:
         it.rectangle(cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.color);
         break;
@@ -981,6 +1063,9 @@ bool DisplayTools::drawDrawObjects(Display &it, BaseFont *textFont, const std::v
         it.print(cmd.x1, cmd.y1, f, cmd.color, cmd.align, cmd.text.c_str());
         break;
       }
+      case DrawCommandType::BITMAP:
+        this->draw_bitmap_from_vector(it, cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.bitmap_data);
+        break;
     }
   }
   return true;
@@ -1003,7 +1088,20 @@ bool DisplayTools::drawDrawObjectsWithIcon(Display &it, BaseFont *textFont, cons
     o.x2 += left_boundary;
     o.x3 += left_boundary;
   }
-  return drawDrawObjects(it, textFont, shifted);
+
+  int repeat = 1;
+  static int frame_hold = 0;
+  const int hold_frames = 250 * repeat;  // ~2 сек при ~8ms кадрі
+
+  drawDrawObjects(it, textFont, shifted);
+
+  // затримка на кадрах
+  frame_hold++;
+  if (frame_hold >= hold_frames) {
+    frame_hold = 0;
+    return true;
+  }
+  return false;
 }
 
 // ---------- Приватні хелпери ----------
@@ -1146,10 +1244,10 @@ void DisplayTools::render_app_screen(display::Display &it) {
     bool done = false;
     if (alert.text.length() > 255) {
       done = this->drawPagedTextWithIcon(it, alert.text, alert.color, alert.icon, alert.icon_color, this->app_font_,
-                                             this->icon_font_, alert.repeat);
+                                         this->icon_font_, alert.repeat);
     } else {
       done = this->drawScrollingTextWithIcon(it, alert.text, alert.color, alert.icon, alert.icon_color, this->app_font_,
-                                         this->icon_font_, alert.repeat);
+                                             this->icon_font_, alert.repeat);
     }
 
     if (done) {
@@ -1174,6 +1272,7 @@ void DisplayTools::render_app_screen(display::Display &it) {
       done = this->drawScrollingTextWithIcon(it, app->text_parts, app->icon, app->icon_color, this->icon_font_,
                                              app->duration);
     } else if (!app->draw_objects.empty()) {
+      it.filled_rectangle(0, 0, it.get_width(), it.get_height(), Color(0, 0, 0));
       done = this->drawDrawObjectsWithIcon(it, this->app_font_, app->draw_objects, app->icon, this->icon_font_,
                                            app->icon_color);
     } else {
@@ -1189,6 +1288,11 @@ void DisplayTools::render_app_screen(display::Display &it) {
       this->nextApp();
     }
   }
+}
+
+void DisplayTools::render_screen(display::Display &it) {
+  render_main_screen(it);
+  render_app_screen(it);
 }
 
 std::vector<DisplayTools::ColoredWord> DisplayTools::make_colored_words(const std::vector<std::string> &texts,

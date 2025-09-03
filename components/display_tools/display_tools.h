@@ -6,7 +6,6 @@
 #include "esphome/components/display/display.h"
 #include "esphome/components/time/real_time_clock.h"
 #include "esphome/core/automation.h"
-//#include <Adafruit_Protomatter.h>
 
 #include <string>
 #include <vector>
@@ -38,32 +37,36 @@ struct RawWord {
 
 enum class Corner { TOP_LEFT, TOP_RIGHT, BOTTOM_LEFT, BOTTOM_RIGHT, COUNT };
 
+// ---------- Публічні типи (були у твоєму .h) ----------
+enum class DrawCommandType {
+  PIXEL,
+  LINE,
+  HLINE,
+  VLINE,
+  RECTANGLE,
+  FILLED_RECTANGLE,
+  TRIANGLE,
+  FILLED_TRIANGLE,
+  TEXT,
+  CIRCLE,
+  FILLED_CIRCLE,
+  BITMAP
+};
+
+struct DrawObject {
+  DrawCommandType type;
+  int x1 = 0, y1 = 0;
+  int x2 = 0, y2 = 0;
+  int x3 = 0, y3 = 0;
+  Color color = Color::WHITE;
+  std::string text;          // для TEXT
+  BaseFont *font = nullptr;  // для TEXT
+  TextAlign align = TextAlign::TOP_LEFT;
+  std::vector<uint8_t> bitmap_data;  // Зберігає дані для бітової карти
+};
+
 class DisplayTools : public Component {
  public:
-  // ---------- Публічні типи (були у твоєму .h) ----------
-  enum class DrawCommandType {
-    PIXEL,
-    LINE,
-    HLINE,
-    VLINE,
-    RECTANGLE,
-    FILLED_RECTANGLE,
-    TRIANGLE,
-    FILLED_TRIANGLE,
-    TEXT
-  };
-
-  struct DrawObject {
-    DrawCommandType type;
-    int x1 = 0, y1 = 0;
-    int x2 = 0, y2 = 0;
-    int x3 = 0, y3 = 0;
-    Color color = Color::WHITE;
-    std::string text;          // для TEXT
-    BaseFont *font = nullptr;  // для TEXT
-    TextAlign align = TextAlign::TOP_LEFT;
-  };
-
   struct ColoredWord {
     std::string text;
     Color color;
@@ -111,6 +114,8 @@ class DisplayTools : public Component {
   void render_main_screen(display::Display &it);
   void render_app_screen(display::Display &it);
 
+  void render_screen(display::Display &it);
+
   // --- setters ---
   void set_night_mode(bool state) { this->night_mode_state_ = state; }
   void set_clock_time(esphome::time::RealTimeClock *clock) { this->clock_time_ = clock; }
@@ -145,6 +150,7 @@ class DisplayTools : public Component {
   // ======================================================================
   //                        КЕРУВАННЯ ДОДАТКАМИ (apps)
   // ======================================================================
+  void dump_app_info(const App_Info &info);
   void addApp(std::string name, std::string body = "", std::string color = "FFFFFF", uint16_t duration = 2,
               std::string icon = "", std::string icon_color = "FFFFFF", std::vector<ColoredWord> text_parts = {},
               std::vector<DrawObject> draw_objects = {});
@@ -171,6 +177,8 @@ class DisplayTools : public Component {
                                                             BaseFont *icon_font);
 
   std::string get_app_loop();
+
+  static Color hex_to_color(const std::string &hex);
 
   // ======================================================================
   //                           КІНЕЦЬ ПУБЛІЧНОГО API
@@ -227,7 +235,6 @@ class DisplayTools : public Component {
   static const char *get_icon_char(const std::string &icon_name);
   static std::string truncate_utf8_string(const std::string &str, size_t max_len);
   static std::string getLastSegment(const std::string &topic);
-  static Color hex_to_color(const std::string &hex);
   static Color hsv_to_rgb(float h, float s, float v);
   static Color get_temp_color(float temp);
   static std::string to_upper(const std::string &input);
@@ -241,16 +248,19 @@ class DisplayTools : public Component {
                                  const Color &iconColor, BaseFont *fontText, BaseFont *fontIcon, int repeat);
   bool drawScrollingTextWithIcon(Display &it, const std::vector<ColoredWord> &textParts, const std::string &icon,
                                  const Color &iconColor, BaseFont *fontIcon, int repeat);
-  bool drawPagedTextWithIcon(Display &it, const std::string &text, const Color &textColor,
-                                         const std::string &icon, const Color &iconColor, BaseFont *fontText,
-                                         BaseFont *fontIcon, int repeat);                                 
+  bool drawPagedTextWithIcon(Display &it, const std::string &text, const Color &textColor, const std::string &icon,
+                             const Color &iconColor, BaseFont *fontText, BaseFont *fontIcon, int repeat);
   bool drawDrawObjects(Display &it, BaseFont *textFont, const std::vector<DrawObject> &objects);
   bool drawDrawObjectsWithIcon(Display &it, BaseFont *textFont, const std::vector<DrawObject> &objects,
                                const std::string &icon, BaseFont *iconFont, const Color &iconColor);
   void draw_colored_line(esphome::display::Display &it, std::vector<int> temp_forecast, bool night_mode_state);
   void draw_alert_corner(Display &it, Corner corner, const Color &color);
+  void draw_bitmap_from_vector(Display &it, int x, int y, int w, int h, const std::vector<uint8_t> &bmp_data);
 
-  void emit_on_play_sound(int no) { if (on_play_trigger_) on_play_trigger_->trigger(no); }
+  void emit_on_play_sound(int no) {
+    if (on_play_trigger_)
+      on_play_trigger_->trigger(no);
+  }
 };
 
 }  // namespace display_tools
